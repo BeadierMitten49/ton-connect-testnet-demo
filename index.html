@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TON Connect — Testnet demo</title>
+
+  <!-- SDK @tonconnect/ui (UMD) с CDN. Глобальная переменная: TON_CONNECT_UI -->
+  <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f6fb; --card: #ffffff; --ink: #1a2030; --muted: #6b7280;
+      --line: #e5e8f0; --accent: #0098ea; --ok: #12a150; --warn: #d97706; --err: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0d1117; --card:#161b22; --ink:#e6edf3; --muted:#8b949e; --line:#2a3038; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--ink); line-height: 1.5;
+      display: flex; justify-content: center; padding: 24px 16px;
+    }
+    .wrap { width: 100%; max-width: 560px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 18px; margin-bottom: 16px;
+    }
+    .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14px; }
+    .row + .row { border-top: 1px dashed var(--line); }
+    .row .k { color: var(--muted); white-space: nowrap; }
+    .row .v { text-align: right; word-break: break-all; font-variant-numeric: tabular-nums; }
+    .badge { display:inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+    .badge.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+    .badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+    .badge.muted { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+    input {
+      width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+      background: transparent; color: var(--ink); font-size: 14px; font-family: inherit;
+    }
+    button.action {
+      width: 100%; margin-top: 14px; padding: 12px; border: none; border-radius: 10px;
+      background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+    }
+    button.action:disabled { opacity: .45; cursor: not-allowed; }
+    a { color: var(--accent); }
+    .log { font-size: 13px; margin-top: 12px; min-height: 20px; word-break: break-all; }
+    .log.ok { color: var(--ok); } .log.err { color: var(--err); } .log.warn { color: var(--warn); }
+    #ton-connect { margin-bottom: 16px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    code { background: color-mix(in srgb, var(--muted) 15%, transparent); padding: 1px 5px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>TON Connect — Testnet demo</h1>
+    <p class="sub">Подключите кошелёк (в режиме <b>testnet</b>) и отправьте тестовую транзакцию себе.</p>
+
+    <!-- Сюда SDK сам отрисует кнопку Connect / аккаунт -->
+    <div id="ton-connect"></div>
+
+    <div class="card" id="status-card">
+      <div class="row"><span class="k">Статус</span><span class="v"><span id="st-conn" class="badge muted">не подключён</span></span></div>
+      <div class="row"><span class="k">Кошелёк</span><span class="v" id="st-wallet">—</span></div>
+      <div class="row"><span class="k">Сеть</span><span class="v" id="st-net">—</span></div>
+      <div class="row"><span class="k">Адрес</span><span class="v" id="st-addr">—</span></div>
+      <div class="row"><span class="k">Raw-адрес</span><span class="v" id="st-raw">—</span></div>
+    </div>
+
+    <div class="card">
+      <label for="to">Получатель (по умолчанию — вы сами)</label>
+      <input id="to" placeholder="kQ… / 0Q… (testnet-адрес)" />
+      <label for="amt">Сумма, TON</label>
+      <input id="amt" type="number" step="0.01" min="0" value="0.05" />
+      <button class="action" id="send" disabled>Отправить транзакцию</button>
+      <div class="hint">Комментарий будет добавлен в тело сообщения. Кошелёк покажет детали и попросит подтверждение.</div>
+      <label for="cmt" style="margin-top:12px;">Комментарий (необязательно)</label>
+      <input id="cmt" placeholder="ton connect test" value="ton connect test" />
+      <div class="log" id="log"></div>
+    </div>
+
+    <p class="hint">
+      Нужны тестовые монеты? Возьмите их у <a href="https://t.me/testgiver_ton_bot" target="_blank" rel="noopener">@testgiver_ton_bot</a> в Telegram.
+      Транзакции смотрите на <a href="https://testnet.tonviewer.com" target="_blank" rel="noopener">testnet.tonviewer.com</a>.
+    </p>
+  </div>
+
+  <script>
+    const { TonConnectUI, toUserFriendlyAddress } = TON_CONNECT_UI;
+
+    // Манифест лежит рядом с этой страницей (tonconnect-manifest.json).
+    const manifestUrl = new URL('tonconnect-manifest.json', location.href).href;
+
+    const tonConnectUI = new TonConnectUI({
+      manifestUrl,
+      buttonRootId: 'ton-connect',
+    });
+
+    const $ = (id) => document.getElementById(id);
+    const log = (msg, cls = '') => { const el = $('log'); el.className = 'log ' + cls; el.textContent = msg; };
+
+    const TESTNET = '-3';   // CHAIN.TESTNET
+    const MAINNET = '-239'; // CHAIN.MAINNET
+
+    function render(wallet) {
+      const connected = !!wallet;
+      $('send').disabled = !connected;
+
+      if (!connected) {
+        $('st-conn').className = 'badge muted'; $('st-conn').textContent = 'не подключён';
+        $('st-wallet').textContent = '—';
+        $('st-net').textContent = '—';
+        $('st-addr').textContent = '—';
+        $('st-raw').textContent = '—';
+        return;
+      }
+
+      const chain = wallet.account.chain;
+      const isTestnet = chain === TESTNET;
+      const raw = wallet.account.address;
+      const friendly = toUserFriendlyAddress(raw, isTestnet);
+
+      $('st-conn').className = 'badge ok'; $('st-conn').textContent = 'подключён';
+      $('st-wallet').textContent = (wallet.device && wallet.device.appName) || wallet.name || 'wallet';
+      $('st-net').innerHTML = isTestnet
+        ? '<span class="badge ok">testnet</span>'
+        : '<span class="badge warn">mainnet ⚠ переключите кошелёк на testnet</span>';
+      $('st-addr').textContent = friendly;
+      $('st-raw').textContent = raw;
+
+      // Подставим свой адрес в поле «получатель», если пусто
+      if (!$('to').value) $('to').value = friendly;
+    }
+
+    // Начальное состояние + реакция на подключение/отключение
+    render(tonConnectUI.wallet);
+    tonConnectUI.onStatusChange(render);
+
+    $('send').onclick = async () => {
+      const wallet = tonConnectUI.wallet;
+      if (!wallet) return;
+
+      if (wallet.account.chain !== TESTNET) {
+        log('Кошелёк не в сети testnet. Переключите сеть в кошельке и переподключитесь.', 'warn');
+        return;
+      }
+
+      const to = ($('to').value || toUserFriendlyAddress(wallet.account.address, true)).trim();
+      const ton = parseFloat($('amt').value);
+      if (!(ton > 0)) { log('Введите сумму больше 0.', 'err'); return; }
+      const amount = Math.round(ton * 1e9).toString(); // TON → нанотоны
+
+      // Тело сообщения с текстовым комментарием (opcode 0x00000000 + UTF-8 текст)
+      const comment = $('cmt').value || '';
+      const payload = comment ? buildCommentPayload(comment) : undefined;
+
+      try {
+        log('Открываю кошелёк для подтверждения…');
+        await tonConnectUI.sendTransaction({
+          validUntil: Math.floor(Date.now() / 1000) + 300, // валидна 5 минут
+          network: TESTNET,
+          messages: [{ address: to, amount, payload }],
+        });
+        const link = 'https://testnet.tonviewer.com/' + toUserFriendlyAddress(wallet.account.address, true);
+        $('log').className = 'log ok';
+        $('log').innerHTML = 'Отправлено ✓ Транзакция появится в кошельке и на <a href="' + link + '" target="_blank" rel="noopener">testnet.tonviewer.com</a> через несколько секунд.';
+      } catch (e) {
+        log('Отклонено или ошибка: ' + (e && e.message ? e.message : e), 'err');
+      }
+    };
+
+    // Собираем BoC тела сообщения с комментарием, base64 — без внешних библиотек.
+    // Формат: 32 нулевых бита (opcode text comment) + UTF-8 байты текста.
+    function buildCommentPayload(text) {
+      const textBytes = new TextEncoder().encode(text);
+      const bits = 32 + textBytes.length * 8; // помещается в одну ячейку (лимит 1023 бита)
+      const dataLen = 4 + textBytes.length;    // 4 байта opcode + текст
+      const data = new Uint8Array(dataLen);    // opcode = 0x00000000 уже нулями
+      data.set(textBytes, 4);
+
+      // Descriptor ячейки: d1 = refs(0), d2 = floor(bits/8)+ceil(bits/8)
+      const fullBytes = Math.floor(bits / 8);
+      const d1 = 0;
+      const d2 = fullBytes * 2 + (bits % 8 ? 1 : 0);
+      // (bits кратен 8, дополнение не нужно)
+
+      const cell = new Uint8Array(2 + dataLen);
+      cell[0] = d1; cell[1] = d2; cell.set(data, 2);
+
+      // Минимальный BoC: magic b5ee9c72, флаги, 1 ячейка, root #0
+      const boc = [
+        0xb5, 0xee, 0x9c, 0x72, // magic
+        0x01,                   // flags/size: has_idx=0, crc32=0, size=1
+        0x01,                   // off_bytes = 1
+        0x01,                   // cells = 1
+        0x01,                   // roots = 1
+        0x00,                   // absent = 0
+        cell.length,            // tot_cells_size
+        0x00,                   // root index #0
+        ...cell,
+      ];
+      return base64(new Uint8Array(boc));
+    }
+
+    function base64(bytes) {
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+  </script>
+</body>
+</html>
