@@ -55,7 +55,7 @@
     <div class="card">
       <label for="addr">Адрес контракта (testnet)</label>
       <input id="addr" spellcheck="false" />
-      <div class="hint">Апи-ключ toncenter (необязательно, против лимитов): <input id="apikey" placeholder="X-API-Key" style="margin-top:4px;" /></div>
+      <div class="hint">Чтение — через Orbs TON Access (без ключа). API-ключ toncenter — только для фолбэка: <input id="apikey" placeholder="X-API-Key (необязательно)" style="margin-top:4px;" /></div>
     </div>
 
     <div class="card">
@@ -81,7 +81,8 @@
     <p class="hint">Тестовые монеты — <a href="https://t.me/testgiver_ton_bot" target="_blank" rel="noopener">@testgiver_ton_bot</a>. Транзакции — на <a href="#" id="explorer" target="_blank" rel="noopener">tonviewer</a>. Как это работает — см. проектную спецификацию.</p>
   </div>
 
-  <script>
+  <script type="module">
+  import { getHttpEndpoint } from 'https://esm.sh/@orbs-network/ton-access';
   (function () {
     const { TonConnectUI, toUserFriendlyAddress } = TON_CONNECT_UI;
     const TESTNET = '-3';
@@ -104,20 +105,30 @@
     let wallet = null, selBucket = null, state = null;
     ui.onStatusChange((w) => { wallet = w; render(); });
 
-    // ---------- reads (toncenter runGetMethod) ----------
-    function endpoint(){ return 'https://testnet.toncenter.com/api/v2/runGetMethod'; }
+    // ---------- reads (Orbs TON Access, jsonRPC runGetMethod) ----------
+    let EP = null;
+    async function ensureEndpoint() {
+      if (EP) return EP;
+      try { EP = await getHttpEndpoint({ network: 'testnet' }); }
+      catch { EP = 'https://testnet.toncenter.com/api/v2/jsonRPC'; }
+      return EP;
+    }
     async function runGet(method, stack=[]) {
+      const ep = await ensureEndpoint();
       const headers = { 'Content-Type':'application/json' };
       const key = $('apikey').value.trim(); if (key) headers['X-API-Key']=key;
-      for (let attempt=0; attempt<4; attempt++) {
-        const res = await fetch(endpoint(), { method:'POST', headers, body: JSON.stringify({ address:$('addr').value.trim(), method, stack }) });
-        if (res.status===429) { await new Promise(r=>setTimeout(r,1500*(attempt+1))); continue; }
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || 'runGetMethod failed');
-        if (data.result.exit_code !== 0) throw new Error('exit_code '+data.result.exit_code);
-        return data.result.stack;
+      let lastErr;
+      for (let attempt=0; attempt<5; attempt++) {
+        try {
+          const res = await fetch(ep, { method:'POST', headers, body: JSON.stringify({ id:1, jsonrpc:'2.0', method:'runGetMethod', params:{ address:$('addr').value.trim(), method, stack } }) });
+          if (res.status===429 || res.status>=500) { await new Promise(r=>setTimeout(r,1200*(attempt+1))); continue; }
+          const data = await res.json();
+          if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+          if (data.result.exit_code !== 0) throw new Error('exit_code '+data.result.exit_code);
+          return data.result.stack;
+        } catch (e) { lastErr = e; await new Promise(r=>setTimeout(r,800)); }
       }
-      throw new Error('rate limited (429) — вставь API-ключ toncenter');
+      throw lastErr || new Error('read failed');
     }
     const num = (item) => { const s=item[1]; const neg=s.startsWith('-'); const v=BigInt(neg?s.slice(1):s); return neg?-v:v; };
 
