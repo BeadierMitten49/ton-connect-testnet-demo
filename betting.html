@@ -102,7 +102,8 @@
     const manifestUrl = new URL('tonconnect-manifest.json', location.href).href;
     const ui = new TonConnectUI({ manifestUrl, buttonRootId: 'ton-connect' });
 
-    let wallet = null, selBucket = null, state = null;
+    let wallet = null, selBucket = null, state = null, busy = false;
+    const claimedRounds = new Set();
     ui.onStatusChange((w) => { wallet = w; render(); });
 
     // ---------- reads (Orbs TON Access, jsonRPC runGetMethod) ----------
@@ -200,10 +201,14 @@
       // actions
       const canBet = open && secLeft>0 && onTestnet && selBucket!==null;
       $('bet-form').style.display = open ? '' : 'none';
-      $('bet-btn').disabled = !canBet;
-      $('bet-btn').textContent = selBucket!==null ? ('Поставить на ['+BUCKETS[selBucket][0]+', '+BUCKETS[selBucket][1]+')') : 'Выбери диапазон';
-      $('claim-btn').style.display = (s.state===1 && onTestnet) ? '' : 'none';
-      $('refund-btn').style.display = ((s.state===2||s.state===3) && onTestnet) ? '' : 'none';
+      $('bet-btn').disabled = !canBet || busy;
+      $('bet-btn').textContent = busy ? '⏳ отправка…' : (selBucket!==null ? ('Поставить на ['+BUCKETS[selBucket][0]+', '+BUCKETS[selBucket][1]+')') : 'Выбери диапазон');
+      const claimedHere = claimedRounds.has(s.roundId);
+      $('claim-btn').style.display = (s.state===1 && onTestnet && !claimedHere) ? '' : 'none';
+      $('claim-btn').disabled = busy;
+      $('claim-btn').textContent = busy ? '⏳ отправка…' : 'Забрать выигрыш';
+      $('refund-btn').style.display = ((s.state===2||s.state===3) && onTestnet && !claimedHere) ? '' : 'none';
+      $('refund-btn').disabled = busy;
     }
 
     async function refresh() {
@@ -212,20 +217,25 @@
     }
 
     // ---------- actions ----------
-    $('bet-btn').onclick = async () => {
+    async function runAction(label, fn) {
+      if (busy) return;                 // guard against rapid multi-click
+      busy = true; render();
+      try { log(label + ' — подтверди в кошельке…'); await fn(); log('Отправлено ✓ обновляю…', 'ok'); }
+      catch(e){ log('Отклонено/ошибка: '+(e.message||e), 'err'); }
+      finally { busy = false; setTimeout(refresh, 6000); render(); }
+    }
+    $('bet-btn').onclick = () => {
       if (selBucket===null || !state) return;
       const amt = nano($('amt').value);
       if (amt <= GAS_RESERVE + 500000000n) { log('Минимум ~0.52 TON (стейк ≥ 0.5).', 'err'); return; }
-      try { log('Подтверди в кошельке…'); await sendTx(amt, placeBetBoc(state.roundId, selBucket));
-        log('Ставка отправлена ✓ Обновляю через несколько секунд…', 'ok'); setTimeout(refresh, 6000);
-      } catch(e){ log('Отклонено/ошибка: '+(e.message||e), 'err'); }
+      runAction('Ставка', () => sendTx(amt, placeBetBoc(state.roundId, selBucket)));
     };
-    $('claim-btn').onclick = async () => { if(!state) return;
-      try { log('Подтверди claim…'); await sendTx(100000000n, claimBoc(state.roundId));
-        log('Claim отправлен ✓', 'ok'); setTimeout(refresh, 6000); } catch(e){ log('Ошибка: '+(e.message||e),'err'); } };
-    $('refund-btn').onclick = async () => { if(!state) return;
-      try { log('Подтверди refund…'); await sendTx(100000000n, refundBoc(state.roundId));
-        log('Refund отправлен ✓', 'ok'); setTimeout(refresh, 6000); } catch(e){ log('Ошибка: '+(e.message||e),'err'); } };
+    $('claim-btn').onclick = () => { if(!state) return;
+      claimedRounds.add(state.roundId);   // hide claim after it's been requested
+      runAction('Claim', () => sendTx(100000000n, claimBoc(state.roundId))); };
+    $('refund-btn').onclick = () => { if(!state) return;
+      claimedRounds.add(state.roundId);
+      runAction('Refund', () => sendTx(100000000n, refundBoc(state.roundId))); };
     $('addr').onchange = refresh;
 
     refresh();
