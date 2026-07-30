@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interval Betting — Testnet</title>
+  <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg:#f4f6fb; --card:#fff; --ink:#1a2030; --muted:#6b7280; --line:#e5e8f0;
+      --accent:#0098ea; --ok:#12a150; --warn:#d97706; --err:#dc2626; --win:#0098ea;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0d1117; --card:#161b22; --ink:#e6edf3; --muted:#8b949e; --line:#2a3038; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      background:var(--bg); color:var(--ink); line-height:1.5; display:flex; justify-content:center; padding:20px 14px; }
+    .wrap { width:100%; max-width:640px; }
+    h1 { font-size:22px; margin:0 0 2px; } .sub { color:var(--muted); font-size:13px; margin:0 0 16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+    .row { display:flex; justify-content:space-between; gap:12px; padding:6px 0; font-size:14px; }
+    .row + .row { border-top:1px dashed var(--line); }
+    .k { color:var(--muted); } .v { text-align:right; word-break:break-all; font-variant-numeric:tabular-nums; }
+    .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+    .b-ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok);}
+    .b-warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn);}
+    .b-muted{background:color-mix(in srgb,var(--muted) 18%,transparent);color:var(--muted);}
+    .buckets { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:6px; }
+    .bucket { border:2px solid var(--line); border-radius:12px; padding:10px 12px; cursor:pointer; transition:.12s; background:transparent; text-align:left; color:inherit; }
+    .bucket:hover { border-color:var(--accent); }
+    .bucket.sel { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,transparent); }
+    .bucket.win { border-color:var(--win); background:color-mix(in srgb,var(--win) 16%,transparent); }
+    .bucket .rng { font-weight:700; font-size:15px; } .bucket .meta { color:var(--muted); font-size:12px; margin-top:3px; }
+    label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+    input { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:transparent; color:var(--ink); font-size:14px; font-family:inherit; }
+    button.action { width:100%; margin-top:12px; padding:12px; border:none; border-radius:10px; background:var(--accent); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+    button.action:disabled { opacity:.45; cursor:not-allowed; }
+    button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+    a { color:var(--accent); } .log { font-size:13px; margin-top:10px; min-height:18px; word-break:break-all; }
+    .log.ok{color:var(--ok);} .log.err{color:var(--err);} .log.warn{color:var(--warn);}
+    #ton-connect { margin-bottom:14px; } .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+    code { background:color-mix(in srgb,var(--muted) 15%,transparent); padding:1px 5px; border-radius:5px; }
+    .mono { font-variant-numeric:tabular-nums; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Interval Betting — Testnet</h1>
+    <p class="sub">Ставь на диапазон, в который попадёт «счёт» игры (0–1000). Правильный диапазон делит банк (pari-mutuel, комиссия 5%).</p>
+
+    <div id="ton-connect"></div>
+
+    <div class="card">
+      <label for="addr">Адрес контракта (testnet)</label>
+      <input id="addr" spellcheck="false" />
+      <div class="hint">Апи-ключ toncenter (необязательно, против лимитов): <input id="apikey" placeholder="X-API-Key" style="margin-top:4px;" /></div>
+    </div>
+
+    <div class="card">
+      <div class="row"><span class="k">Раунд</span><span class="v"><span id="r-id">—</span> · <span id="r-state" class="badge b-muted">—</span></span></div>
+      <div class="row"><span class="k">Приём ставок</span><span class="v" id="r-window">—</span></div>
+      <div class="row"><span class="k">Банк</span><span class="v mono" id="r-pool">—</span></div>
+      <div class="row" id="r-outcome-row" style="display:none"><span class="k">Результат (счёт)</span><span class="v mono" id="r-outcome">—</span></div>
+
+      <div class="buckets" id="buckets"></div>
+
+      <div id="bet-form">
+        <label for="amt">Сумма ставки, TON (стейк = сумма − 0.02 газ-резерв; мин. стейк 0.5)</label>
+        <input id="amt" type="number" step="0.1" min="0.52" value="1" />
+        <button class="action" id="bet-btn" disabled>Поставить</button>
+      </div>
+
+      <button class="action" id="claim-btn" style="display:none">Забрать выигрыш</button>
+      <button class="action ghost" id="refund-btn" style="display:none">Вернуть ставку</button>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <p class="hint">Тестовые монеты — <a href="https://t.me/testgiver_ton_bot" target="_blank" rel="noopener">@testgiver_ton_bot</a>. Транзакции — на <a href="#" id="explorer" target="_blank" rel="noopener">tonviewer</a>. Как это работает — см. проектную спецификацию.</p>
+  </div>
+
+  <script>
+  (function () {
+    const { TonConnectUI, toUserFriendlyAddress } = TON_CONNECT_UI;
+    const TESTNET = '-3';
+    const FEE_BPS = 500n;
+    const GAS_RESERVE = 20000000n;       // 0.02 TON
+    const BUCKETS = [[0,250],[250,500],[500,750],[750,1000]];
+    const DEFAULT_CONTRACT = 'kQDufob1j9QxseZLLS0_kDKePFzjxl4nWU0FfSIPByyp4brn';
+
+    const $ = (id) => document.getElementById(id);
+    const log = (m, c='') => { const e=$('log'); e.className='log '+c; e.innerHTML=m; };
+    const nowSec = () => Math.floor(Date.now()/1000);
+    const nano = (t) => BigInt(Math.round(parseFloat(t)*1e9));
+    const ton = (n) => (Number(n)/1e9).toFixed(3);
+
+    $('addr').value = DEFAULT_CONTRACT;
+
+    const manifestUrl = new URL('tonconnect-manifest.json', location.href).href;
+    const ui = new TonConnectUI({ manifestUrl, buttonRootId: 'ton-connect' });
+
+    let wallet = null, selBucket = null, state = null;
+    ui.onStatusChange((w) => { wallet = w; render(); });
+
+    // ---------- reads (toncenter runGetMethod) ----------
+    function endpoint(){ return 'https://testnet.toncenter.com/api/v2/runGetMethod'; }
+    async function runGet(method, stack=[]) {
+      const headers = { 'Content-Type':'application/json' };
+      const key = $('apikey').value.trim(); if (key) headers['X-API-Key']=key;
+      for (let attempt=0; attempt<4; attempt++) {
+        const res = await fetch(endpoint(), { method:'POST', headers, body: JSON.stringify({ address:$('addr').value.trim(), method, stack }) });
+        if (res.status===429) { await new Promise(r=>setTimeout(r,1500*(attempt+1))); continue; }
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'runGetMethod failed');
+        if (data.result.exit_code !== 0) throw new Error('exit_code '+data.result.exit_code);
+        return data.result.stack;
+      }
+      throw new Error('rate limited (429) — вставь API-ключ toncenter');
+    }
+    const num = (item) => { const s=item[1]; const neg=s.startsWith('-'); const v=BigInt(neg?s.slice(1):s); return neg?-v:v; };
+
+    async function readState() {
+      const g = await runGet('globals');
+      const roundId = Number(num(g[0]));
+      const feeBps = num(g[4]);
+      const r = await runGet('round', [['num', String(roundId)]]);
+      const pools = [];
+      for (let i=0;i<BUCKETS.length;i++){ const bp = await runGet('bucketPool', [['num',String(roundId)],['num',String(i)]]); pools.push(num(bp[0])); await new Promise(x=>setTimeout(x,120)); }
+      return {
+        roundId, feeBps, stopping: num(g[1])!==0n,
+        state: Number(num(r[0])), startsAt: Number(num(r[1])), bettingClose: Number(num(r[2])),
+        totalPool: num(r[4]), winningBucket: Number(num(r[5])), outcome: Number(num(r[6])),
+        distributable: num(r[7]), winningPool: num(r[8]), pools,
+      };
+    }
+
+    // ---------- payload BoC (single byte-aligned cell, no refs) ----------
+    function b64(bytes){ let s=''; for (const b of bytes) s+=String.fromCharCode(b); return btoa(s); }
+    function u32(n){ return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]; }
+    function u16(n){ return [(n>>>8)&255,n&255]; }
+    function cellBoc(bytes){ const d2=bytes.length*2; const cell=[0,d2,...bytes];
+      return b64(new Uint8Array([0xb5,0xee,0x9c,0x72,0x01,0x01,0x01,0x01,0x00,cell.length,0x00,...cell])); }
+    const placeBetBoc = (rid,bkt) => cellBoc([...u32(0x01),...u32(rid),...u16(bkt)]);
+    const claimBoc = (rid) => cellBoc([...u32(0x02),...u32(rid)]);
+    const refundBoc = (rid) => cellBoc([...u32(0x03),...u32(rid)]);
+
+    async function sendTx(amountNano, payload) {
+      return ui.sendTransaction({
+        validUntil: nowSec()+300, network: TESTNET,
+        messages: [{ address: $('addr').value.trim(), amount: amountNano.toString(), payload }],
+      });
+    }
+
+    // ---------- render ----------
+    const STATE = {0:['OPEN','b-ok'],1:['RESOLVED','b-ok'],2:['NO WINNER','b-warn'],3:['VOID','b-warn']};
+    function render() {
+      $('explorer').href = 'https://testnet.tonviewer.com/' + $('addr').value.trim();
+      const onTestnet = wallet && wallet.account.chain === TESTNET;
+      if (wallet && !onTestnet) log('Кошелёк не в testnet — переключи сеть и переподключись.', 'warn');
+
+      if (!state) { $('buckets').innerHTML=''; return; }
+      const s = state;
+      $('r-id').textContent = '#'+s.roundId;
+      const [lbl,cls] = STATE[s.state] || ['—','b-muted'];
+      $('r-state').className = 'badge '+cls; $('r-state').textContent = lbl;
+      $('r-pool').textContent = ton(s.totalPool)+' TON';
+      const open = s.state===0;
+      const secLeft = s.bettingClose - nowSec();
+      $('r-window').textContent = open ? (secLeft>0 ? ('открыт, ~'+Math.max(0,secLeft)+' сек') : 'закрывается…') : 'закрыт';
+
+      $('r-outcome-row').style.display = (s.state===1||s.state===2) ? '' : 'none';
+      $('r-outcome').textContent = (s.state===1||s.state===2) ? (s.outcome+'  → бакет '+s.winningBucket) : '—';
+
+      // buckets
+      const feeMul = Number(10000n - s.feeBps)/10000;
+      $('buckets').innerHTML = '';
+      BUCKETS.forEach(([lo,hi],i) => {
+        const pool = s.pools[i];
+        const div = document.createElement('button'); div.className='bucket'+(selBucket===i?' sel':'')+(((s.state===1||s.state===2)&&s.winningBucket===i)?' win':'');
+        let odds='—';
+        if (pool>0n){ odds = '×'+((Number(s.totalPool)*feeMul)/Number(pool)).toFixed(2); }
+        div.innerHTML = '<div class="rng">['+lo+', '+hi+')</div><div class="meta">пул '+ton(pool)+' TON · коэф '+odds+'</div>';
+        div.onclick = () => { if(open){ selBucket=i; render(); } };
+        $('buckets').appendChild(div);
+      });
+
+      // actions
+      const canBet = open && secLeft>0 && onTestnet && selBucket!==null;
+      $('bet-form').style.display = open ? '' : 'none';
+      $('bet-btn').disabled = !canBet;
+      $('bet-btn').textContent = selBucket!==null ? ('Поставить на ['+BUCKETS[selBucket][0]+', '+BUCKETS[selBucket][1]+')') : 'Выбери диапазон';
+      $('claim-btn').style.display = (s.state===1 && onTestnet) ? '' : 'none';
+      $('refund-btn').style.display = ((s.state===2||s.state===3) && onTestnet) ? '' : 'none';
+    }
+
+    async function refresh() {
+      try { state = await readState(); render(); }
+      catch (e) { log('Ошибка чтения: '+(e.message||e), 'err'); }
+    }
+
+    // ---------- actions ----------
+    $('bet-btn').onclick = async () => {
+      if (selBucket===null || !state) return;
+      const amt = nano($('amt').value);
+      if (amt <= GAS_RESERVE + 500000000n) { log('Минимум ~0.52 TON (стейк ≥ 0.5).', 'err'); return; }
+      try { log('Подтверди в кошельке…'); await sendTx(amt, placeBetBoc(state.roundId, selBucket));
+        log('Ставка отправлена ✓ Обновляю через несколько секунд…', 'ok'); setTimeout(refresh, 6000);
+      } catch(e){ log('Отклонено/ошибка: '+(e.message||e), 'err'); }
+    };
+    $('claim-btn').onclick = async () => { if(!state) return;
+      try { log('Подтверди claim…'); await sendTx(100000000n, claimBoc(state.roundId));
+        log('Claim отправлен ✓', 'ok'); setTimeout(refresh, 6000); } catch(e){ log('Ошибка: '+(e.message||e),'err'); } };
+    $('refund-btn').onclick = async () => { if(!state) return;
+      try { log('Подтверди refund…'); await sendTx(100000000n, refundBoc(state.roundId));
+        log('Refund отправлен ✓', 'ok'); setTimeout(refresh, 6000); } catch(e){ log('Ошибка: '+(e.message||e),'err'); } };
+    $('addr').onchange = refresh;
+
+    refresh();
+    setInterval(refresh, 12000);
+    setInterval(render, 1000); // live countdown
+  })();
+  </script>
+</body>
+</html>
