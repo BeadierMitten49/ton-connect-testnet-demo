@@ -180,7 +180,7 @@
       $('r-pool').textContent = ton(s.totalPool)+' TON';
       const open = s.state===0;
       const secLeft = s.bettingClose - nowSec();
-      $('r-window').textContent = open ? (secLeft>0 ? ('открыт, ~'+Math.max(0,secLeft)+' сек') : 'закрывается…') : 'закрыт';
+      $('r-window').textContent = open ? (secLeft>0 ? ('открыт, ~'+Math.max(0,secLeft)+' сек') : 'ставки закрыты, ждём результат…') : 'закрыт';
 
       $('r-outcome-row').style.display = (s.state===1||s.state===2) ? '' : 'none';
       $('r-outcome').textContent = (s.state===1||s.state===2) ? (s.outcome+'  → бакет '+s.winningBucket) : '—';
@@ -211,7 +211,9 @@
       $('refund-btn').disabled = busy;
     }
 
+    let lastRefresh = 0;
     async function refresh() {
+      lastRefresh = Date.now();
       try { state = await readState(); render(); }
       catch (e) { log('Ошибка чтения: '+(e.message||e), 'err'); }
     }
@@ -239,8 +241,14 @@
     $('addr').onchange = refresh;
 
     refresh();
-    setInterval(refresh, 12000);
-    setInterval(render, 1000); // live countdown
+    setInterval(refresh, 10000);
+    setInterval(() => {
+      render(); // live countdown
+      // once betting closes but the round is still OPEN, poll faster to catch the result promptly
+      if (state && state.state === 0 && (state.bettingClose - nowSec()) <= 0 && Date.now() - lastRefresh > 4000) {
+        refresh();
+      }
+    }, 1000);
   })();
   </script>
 </body>
