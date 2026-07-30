@@ -112,28 +112,29 @@
     const claimedRounds = new Set();
     ui.onStatusChange((w) => { wallet = w; render(); scanMyUnclaimed(); });
 
-    // ---------- reads (Orbs TON Access, jsonRPC runGetMethod) ----------
+    // ---------- reads (Orbs TON Access first, toncenter fallback; resilient) ----------
+    const TONCENTER = 'https://testnet.toncenter.com/api/v2/jsonRPC';
     let EP = null;
-    async function ensureEndpoint() {
+    async function resolveEP(preferToncenter) {
       if (EP) return EP;
-      try { EP = await getHttpEndpoint({ network: 'testnet' }); }
-      catch { EP = 'https://testnet.toncenter.com/api/v2/jsonRPC'; }
+      if (preferToncenter) { EP = TONCENTER; return EP; }
+      try { EP = await getHttpEndpoint({ network: 'testnet' }); } catch { EP = TONCENTER; }
       return EP;
     }
     async function runGet(method, stack=[]) {
-      const ep = await ensureEndpoint();
       const headers = { 'Content-Type':'application/json' };
       const key = $('apikey').value.trim(); if (key) headers['X-API-Key']=key;
       let lastErr;
-      for (let attempt=0; attempt<5; attempt++) {
+      for (let attempt=0; attempt<7; attempt++) {
         try {
+          const ep = await resolveEP(attempt >= 3);   // after a few tries, fall back to toncenter
           const res = await fetch(ep, { method:'POST', headers, body: JSON.stringify({ id:1, jsonrpc:'2.0', method:'runGetMethod', params:{ address:$('addr').value.trim(), method, stack } }) });
-          if (res.status===429 || res.status>=500) { await new Promise(r=>setTimeout(r,1200*(attempt+1))); continue; }
+          if (res.status===429 || res.status>=500) { EP=null; await new Promise(r=>setTimeout(r,1000*(attempt+1))); continue; }
           const data = await res.json();
           if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
           if (data.result.exit_code !== 0) throw new Error('exit_code '+data.result.exit_code);
           return data.result.stack;
-        } catch (e) { lastErr = e; await new Promise(r=>setTimeout(r,800)); }
+        } catch (e) { lastErr = e; EP = null; await new Promise(r=>setTimeout(r,900)); }  // reset node on any failure
       }
       throw lastErr || new Error('read failed');
     }
