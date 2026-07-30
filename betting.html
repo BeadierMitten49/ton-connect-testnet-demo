@@ -78,11 +78,17 @@
       <div class="log" id="log"></div>
     </div>
 
+    <div class="card" id="unclaimed-card" style="display:none">
+      <div class="row"><span class="k"><b>Мои невыбранные выигрыши / возвраты</b> (прошлые раунды)</span><span class="v"><button id="rescan" class="ghost" style="padding:3px 10px;border-radius:8px;font-size:12px;width:auto;margin:0;">обновить</button></span></div>
+      <div id="unclaimed-list"></div>
+    </div>
+
     <p class="hint">Тестовые монеты — <a href="https://t.me/testgiver_ton_bot" target="_blank" rel="noopener">@testgiver_ton_bot</a>. Транзакции — на <a href="#" id="explorer" target="_blank" rel="noopener">tonviewer</a>. Как это работает — см. проектную спецификацию.</p>
   </div>
 
   <script type="module">
   import { getHttpEndpoint } from 'https://esm.sh/@orbs-network/ton-access';
+  import { beginCell, Address } from 'https://esm.sh/@ton/core';
   (function () {
     const { TonConnectUI, toUserFriendlyAddress } = TON_CONNECT_UI;
     const TESTNET = '-3';
@@ -104,7 +110,7 @@
 
     let wallet = null, selBucket = null, state = null, busy = false;
     const claimedRounds = new Set();
-    ui.onStatusChange((w) => { wallet = w; render(); });
+    ui.onStatusChange((w) => { wallet = w; render(); scanMyUnclaimed(); });
 
     // ---------- reads (Orbs TON Access, jsonRPC runGetMethod) ----------
     let EP = null;
@@ -218,13 +224,58 @@
       catch (e) { log('Ошибка чтения: '+(e.message||e), 'err'); }
     }
 
+    // ---------- "my unclaimed winnings" across past rounds ----------
+    let unclaimed = [], scanning = false;
+    function addrBoc(rawAddr){ return beginCell().storeAddress(Address.parseRaw(rawAddr)).endCell().toBoc().toString('base64'); }
+    async function getBet(roundId, rawAddr){
+      const s = await runGet('bet', [['num', String(roundId)], ['tvm.Slice', addrBoc(rawAddr)]]);
+      return { bucketId: Number(num(s[0])), amount: num(s[1]), settled: num(s[2]) !== 0n };
+    }
+    async function getRoundState(roundId){
+      const s = await runGet('round', [['num', String(roundId)]]);
+      return { state: Number(num(s[0])), winningBucket: Number(num(s[5])) };
+    }
+    async function scanMyUnclaimed(){
+      if (!wallet || !state || scanning) { if(!wallet) { $('unclaimed-card').style.display='none'; } return; }
+      scanning = true;
+      try {
+        const cur = state.roundId, from = Math.max(1, cur - 40), found = [];
+        for (let rid = cur - 1; rid >= from; rid--) {
+          let bet; try { bet = await getBet(rid, wallet.account.address); } catch { continue; }
+          if (bet.bucketId < 0 || bet.settled || bet.amount <= 0n) continue;
+          let r; try { r = await getRoundState(rid); } catch { continue; }
+          if (r.state === 1 && bet.bucketId === r.winningBucket) found.push({ rid, type:'claim', amount: bet.amount });
+          else if (r.state === 2 || r.state === 3) found.push({ rid, type:'refund', amount: bet.amount });
+        }
+        unclaimed = found; renderUnclaimed();
+      } finally { scanning = false; }
+    }
+    function renderUnclaimed(){
+      const list = $('unclaimed-list');
+      const items = unclaimed.filter(it => !claimedRounds.has(it.rid));
+      if (!items.length) { $('unclaimed-card').style.display='none'; list.innerHTML=''; return; }
+      $('unclaimed-card').style.display=''; list.innerHTML='';
+      for (const it of items) {
+        const row = document.createElement('div'); row.className='row';
+        const k = document.createElement('span'); k.className='k';
+        k.textContent = it.type==='claim' ? ('Раунд #'+it.rid+' — выигрыш (ставка '+ton(it.amount)+' TON)') : ('Раунд #'+it.rid+' — возврат '+ton(it.amount)+' TON');
+        const v = document.createElement('span'); v.className='v';
+        const btn = document.createElement('button'); btn.className='action'; btn.style.width='auto'; btn.style.margin='0'; btn.style.padding='6px 12px';
+        btn.textContent = it.type==='claim' ? 'Забрать' : 'Вернуть'; btn.disabled = busy;
+        btn.onclick = () => it.type==='claim' ? doClaim(it.rid) : doRefund(it.rid);
+        v.appendChild(btn); row.appendChild(k); row.appendChild(v); list.appendChild(row);
+      }
+    }
+    function doClaim(rid){ claimedRounds.add(rid); renderUnclaimed(); runAction('Claim', () => sendTx(100000000n, claimBoc(rid))); }
+    function doRefund(rid){ claimedRounds.add(rid); renderUnclaimed(); runAction('Refund', () => sendTx(100000000n, refundBoc(rid))); }
+
     // ---------- actions ----------
     async function runAction(label, fn) {
       if (busy) return;                 // guard against rapid multi-click
       busy = true; render();
       try { log(label + ' — подтверди в кошельке…'); await fn(); log('Отправлено ✓ обновляю…', 'ok'); }
       catch(e){ log('Отклонено/ошибка: '+(e.message||e), 'err'); }
-      finally { busy = false; setTimeout(refresh, 6000); render(); }
+      finally { busy = false; setTimeout(() => { refresh(); scanMyUnclaimed(); }, 6000); render(); }
     }
     $('bet-btn').onclick = () => {
       if (selBucket===null || !state) return;
@@ -232,16 +283,15 @@
       if (amt <= GAS_RESERVE + 500000000n) { log('Минимум ~0.52 TON (стейк ≥ 0.5).', 'err'); return; }
       runAction('Ставка', () => sendTx(amt, placeBetBoc(state.roundId, selBucket)));
     };
-    $('claim-btn').onclick = () => { if(!state) return;
-      claimedRounds.add(state.roundId);   // hide claim after it's been requested
-      runAction('Claim', () => sendTx(100000000n, claimBoc(state.roundId))); };
-    $('refund-btn').onclick = () => { if(!state) return;
-      claimedRounds.add(state.roundId);
-      runAction('Refund', () => sendTx(100000000n, refundBoc(state.roundId))); };
+    $('claim-btn').onclick = () => { if(state) doClaim(state.roundId); };
+    $('refund-btn').onclick = () => { if(state) doRefund(state.roundId); };
     $('addr').onchange = refresh;
 
+    $('rescan').onclick = scanMyUnclaimed;
     refresh();
     setInterval(refresh, 10000);
+    setInterval(scanMyUnclaimed, 30000);
+    setTimeout(scanMyUnclaimed, 3500);
     setInterval(() => {
       render(); // live countdown
       // once betting closes but the round is still OPEN, poll faster to catch the result promptly
